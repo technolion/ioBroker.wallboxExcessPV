@@ -16,8 +16,9 @@ schedule('* * * * * *', calcExcess);
 schedule('*/2 * * * *', setWallbox);
 
 currentChargingPower = 0;
-list.fill(0);
+list.fill(getCurrentSurplus());
 
+//initialize in case wallbox is already charging when script is started
 if (getState("easee.0.EH8XMF8C.status.chargerOpMode").val == 3) {
     var voltage = getState('easee.0.EH8XMF8C.status.voltage').val;
     currentChargingPower = getState("easee.0.EH8XMF8C.config.dynamicCircuitCurrentP1").val * voltage
@@ -34,8 +35,8 @@ console.log("Started PV excess power wallbox charging script. Updates to the wal
 
 function calcExcess() {
     //calculate if we we have surplus or shortage
-    var currentSurplus = getState('javascript.0.PV.surplus').val - reservedExcess - getState('javascript.0.PV.regard').val;
-
+    var currentSurplus = getCurrentSurplus();
+    
     list.shift();
     list.push(currentSurplus);
     let sum = list.reduce(function(a, b){
@@ -43,34 +44,34 @@ function calcExcess() {
     });
     avgSurplusPower = Math.round(sum/numberSamples);
 
-    excessPower = currentChargingPower + avgSurplusPower;
+    excessPower = Math.round(currentChargingPower + avgSurplusPower);
+
+    //console.log("Excess power: "+excessPower+" W");
 }
 
 function setWallbox() {
     //chargerOpMode = Offline: 0, Disconnected: 1, AwaitingStart: 2, Charging: 3, Completed: 4, Error: 5, ReadyToCharge: 6
-
+    var wallboxMode = getState("easee.0.EH8XMF8C.status.chargerOpMode").val;
     console.log("Checking if charging speed needs to be adapted.")
     if(excessPower > 2000) {
         // if there is more that 2 kW excess power we start charging
 
-        if (getState("easee.0.EH8XMF8C.status.chargerOpMode").val == 0) {
+        if (wallboxMode == 0) {
             console.log("There is PV excess power but the wallbox is offline!");
             return;
         }
-        if (getState("easee.0.EH8XMF8C.status.chargerOpMode").val == 1) {
+        if (wallboxMode == 1) {
             console.log("There is PV excess power but the wallbox is disconnected!");
             return;
         }
-        if (getState("easee.0.EH8XMF8C.status.chargerOpMode").val == 4) {
+        if (wallboxMode == 4) {
             console.log("There is PV excess power but the charging process is completed.");
             return;
         }
-        if (getState("easee.0.EH8XMF8C.status.chargerOpMode").val == 5) {
+        if (wallboxMode == 5) {
             console.log("There is PV excess power but the wallbox has an error!");
             return;
         }
-
-        console.log('Charging at ('+(currentChargingPower/1000).toFixed(1) +' kW)), excess power at: ' + Math.round(excessPower) + " W.");
 
         var voltage = getState('easee.0.EH8XMF8C.status.voltage').val;
 
@@ -80,9 +81,7 @@ function setWallbox() {
             ampere = Math.max(ampere, minAmpere);
 
             if((voltage * ampere * 3) != currentChargingPower) {
-                currentChargingPower = voltage * ampere;
-
-                currentChargingPower = voltage * ampere * 3;
+                currentChargingPower = Math.round(voltage * ampere * 3);
                 setState("easee.0.EH8XMF8C.config.dynamicCircuitCurrentP1", ampere);
                 setState("easee.0.EH8XMF8C.config.dynamicCircuitCurrentP2", ampere);
                 setState("easee.0.EH8XMF8C.config.dynamicCircuitCurrentP3", ampere);
@@ -103,7 +102,7 @@ function setWallbox() {
             ampere = Math.max(ampere, minAmpere);
             
             if((voltage * ampere) != currentChargingPower) {
-                currentChargingPower = voltage * ampere;
+                currentChargingPower =  Math.round(voltage * ampere);
 
                 setState("easee.0.EH8XMF8C.config.dynamicCircuitCurrentP1", ampere);
                 setState("easee.0.EH8XMF8C.config.dynamicCircuitCurrentP2", 0);
@@ -126,9 +125,11 @@ function setWallbox() {
             setState("easee.0.EH8XMF8C.control.resume", true);
             setState("easee.0.EH8XMF8C.control.start", true);
         }
+
+        console.log('Charging at '+(currentChargingPower/1000).toFixed(1) +' kW, excess power at: ' + excessPower + " W.");
         
     } else {
-        console.log('Not charging, excess power too low: ' + String(excessPower) + " W.");
+        console.log('Not charging, excess power too low: ' + excessPower + " W.");
         //stop charging
         if (getState("easee.0.EH8XMF8C.status.chargerOpMode").val == 3) {
             console.log(('PV excess charging stopped!'));
@@ -138,6 +139,10 @@ function setWallbox() {
             setState("easee.0.EH8XMF8C.control.pause", true);
             setState("easee.0.EH8XMF8C.control.stop", true);
         }
+        currentChargingPower = 0;
     }
 }
 
+function getCurrentSurplus() {
+    return getState('javascript.0.PV.surplus').val - reservedExcess - getState('javascript.0.PV.regard').val;
+}
